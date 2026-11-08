@@ -23,6 +23,8 @@ interface PaymentDialogProps {
   clearSelectedOrder: () => void;
   discountPercentage?: number;
   discountAmount?: number;
+  // When set, the dialog only collects the discount and prints instead of taking payment.
+  onPrint?: (discount: number | null) => Promise<void>;
 }
 
 const PaymentDialog: React.FC<PaymentDialogProps> = ({
@@ -39,7 +41,8 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   fetchOrders,
   clearSelectedOrder,
   discountPercentage,
-  discountAmount
+  discountAmount,
+  onPrint
 }) => {
   const { paymentModes, fetchPaymentModes, posProfile: storePosProfile } = usePOSStore();
   const [isProcessing, setIsProcessing] = useState(false);
@@ -164,13 +167,36 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     }
   };
 
+  const handlePrint = async () => {
+    if (!onPrint) return;
+    const value = discountValue.trim() === '' ? null : parseFloat(discountValue);
+    if (value !== null && (isNaN(value) || value < 0)) {
+      setError(t('errors.invalid_discount'));
+      return;
+    }
+    if (value !== null && value > 100) {
+      setError(t('errors.discount_exceeds_max'));
+      return;
+    }
+    setIsProcessing(true);
+    setError(null);
+    try {
+      await onPrint(value);
+    } catch (err) {
+      console.error('Print failed:', err);
+      setError(parseFrappeError(err, t('errors.print_failed', { reason: '' })));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   return (
     <Dialog open={true} onOpenChange={onClose}>
       <DialogContent variant="xlarge" className="bg-white w-full max-w-4xl max-h-dialog-max-h flex flex-col md:flex-row p-0" showCloseButton={false}>
         {/* Left Column - Discount and Payment Mode */}
         <div className="md:w-1/2 p-6 border-b md:border-b-0 md:border-r border-border overflow-y-auto">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">{t('payment.title')}</h2>
+            <h2 className="text-2xl font-bold text-gray-900">{onPrint ? t('order.print') : t('payment.title')}</h2>
             <Button
               onClick={onClose}
               variant="ghost"
@@ -209,7 +235,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           )}
 
           {/* Payment Methods Section - Split Payment */}
-          <div className="space-y-4 mb-6">
+          {!onPrint && <div className="space-y-4 mb-6">
             <h3 className="text-lg font-semibold">{t('payment.payment_methods')}</h3>
             <div className="grid grid-cols-1 gap-3">
               {paymentModes.map((mode: any) => {
@@ -255,7 +281,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 {t('payment.change_due', { amount: formatCurrency(paymentsTotal - finalTotal) })}
               </p>
             )}
-          </div>
+          </div>}
         </div>
 
         {/* Right Column - Order Summary and Pay Button */}
@@ -306,15 +332,21 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
             </div>
           </div>
 
-          {/* Payment Button */}
-          <Button
-            onClick={handlePayment}
-            disabled={isProcessing || payments.length === 0 || isShort}
-            variant={isProcessing || payments.length === 0 || isShort ? "secondary" : "default"}
-            className="w-full"
-          >
-            {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(paymentsTotal > 0 ? paymentsTotal : finalTotal) })}
-          </Button>
+          {/* Print / Payment Button */}
+          {onPrint ? (
+            <Button onClick={handlePrint} disabled={isProcessing} className="w-full">
+              {isProcessing ? t('payment.processing') : t('order.print')}
+            </Button>
+          ) : (
+            <Button
+              onClick={handlePayment}
+              disabled={isProcessing || payments.length === 0 || isShort}
+              variant={isProcessing || payments.length === 0 || isShort ? "secondary" : "default"}
+              className="w-full"
+            >
+              {isProcessing ? t('payment.processing') : t('payment.pay_button', { amount: formatCurrency(paymentsTotal > 0 ? paymentsTotal : finalTotal) })}
+            </Button>
+          )}
         </div>
       </DialogContent>
     </Dialog>

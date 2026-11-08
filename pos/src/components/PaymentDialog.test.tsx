@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import PaymentDialog from "./PaymentDialog";
 
 const mockUsePOSStore = vi.fn();
@@ -208,5 +208,54 @@ describe("PaymentDialog", () => {
     );
     
     expect(screen.getByText(/payment.order_summary/)).toBeInTheDocument();
+  });
+
+  describe("print mode", () => {
+    const renderPrintMode = (onPrint = vi.fn().mockResolvedValue(undefined)) => {
+      render(
+        <PaymentDialog
+          onClose={vi.fn()}
+          grandTotal={1000}
+          roundedTotal={1000}
+          invoice="INV001"
+          customer="CUST001"
+          posProfile="POS001"
+          table={null}
+          cashier="user1"
+          owner="user1"
+          fetchOrders={vi.fn()}
+          clearSelectedOrder={vi.fn()}
+          onPrint={onPrint}
+        />
+      );
+      return onPrint;
+    };
+
+    it("asks for the discount but not for payment", () => {
+      renderPrintMode();
+      expect(screen.getByText("payment.apply_discount")).toBeInTheDocument();
+      expect(screen.queryByText("payment.payment_methods")).not.toBeInTheDocument();
+    });
+
+    it("prints with the entered discount", async () => {
+      const onPrint = renderPrintMode();
+      fireEvent.change(screen.getByPlaceholderText("payment.discount_placeholder"), { target: { value: "10" } });
+      fireEvent.click(screen.getAllByText("order.print")[1]);
+      await waitFor(() => expect(onPrint).toHaveBeenCalledWith(10));
+    });
+
+    it("prints without a discount when left blank", async () => {
+      const onPrint = renderPrintMode();
+      fireEvent.click(screen.getAllByText("order.print")[1]);
+      await waitFor(() => expect(onPrint).toHaveBeenCalledWith(null));
+    });
+
+    it("does not print a discount over 100%", () => {
+      const onPrint = renderPrintMode();
+      fireEvent.change(screen.getByPlaceholderText("payment.discount_placeholder"), { target: { value: "150" } });
+      fireEvent.click(screen.getAllByText("order.print")[1]);
+      expect(onPrint).not.toHaveBeenCalled();
+      expect(screen.getByText("errors.discount_exceeds_max")).toBeInTheDocument();
+    });
   });
 });

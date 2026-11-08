@@ -33,6 +33,7 @@ from ury.ury.api.ury_stock_policy import StockPolicy
 from ury.ury.doctype.ury_order.test_ury_order import _FakeInvoice, _FakeRow
 from ury.ury.doctype.ury_order.ury_order import (
     _validate_additional_discount,
+    apply_bill_discount,
     make_invoice,
     merge_free_tables,
     merge_tables_batch,
@@ -1032,3 +1033,62 @@ class TestSplitBillGuards(FrappeTestCase):
                 [{"name": "ITEM-ROW-A", "qty": 2}, {"name": "ITEM-ROW-B", "qty": 1}],
             )
         self.assertIn("At least one item must remain", str(ctx.exception))
+
+
+class TestApplyBillDiscount(FrappeTestCase):
+    """`apply_bill_discount`: saves the discount on a draft before printing."""
+
+    def _invoice(self, **overrides):
+        fields = dict(
+            name="POS-INV-SRC",
+            docstatus=0,
+            branch="Test Branch",
+            pos_profile="Test Profile",
+            additional_discount_percentage=0,
+            discount_amount=0,
+            grand_total=250,
+            rounded_total=250,
+        )
+        fields.update(overrides)
+        invoice = _FakeInvoice(**fields)
+        invoice.check_permission = MagicMock()
+        invoice.calculate_taxes_and_totals = MagicMock()
+        invoice.save = MagicMock()
+        return invoice
+
+    def _run(self, invoice, discount, branch="Test Branch"):
+        with patch(f"{MODULE}.frappe.get_doc", return_value=invoice), patch(
+            f"{MODULE}.getBranch", return_value=branch
+        ), patch(f"{MODULE}._validate_additional_discount", return_value=discount):
+            return apply_bill_discount(invoice.name, discount)
+
+    def test_saves_a_new_discount_on_the_draft(self):
+        invoice = self._invoice()
+        self._run(invoice, 10)
+        self.assertEqual(invoice.additional_discount_percentage, 10)
+        invoice.calculate_taxes_and_totals.assert_called_once()
+        invoice.save.assert_called_once()
+
+    def test_clearing_a_discount_also_resets_the_amount(self):
+        invoice = self._invoice(additional_discount_percentage=10, discount_amount=25)
+        self._run(invoice, 0)
+        self.assertEqual(invoice.additional_discount_percentage, 0)
+        self.assertEqual(invoice.discount_amount, 0)
+        invoice.save.assert_called_once()
+
+    def test_an_unchanged_discount_does_not_save(self):
+        invoice = self._invoice(additional_discount_percentage=10, discount_amount=25)
+        self._run(invoice, 10)
+        invoice.save.assert_not_called()
+
+    def test_rejects_a_submitted_invoice(self):
+        invoice = self._invoice(docstatus=1)
+        with self.assertRaises(frappe.ValidationError):
+            self._run(invoice, 10)
+        invoice.save.assert_not_called()
+
+    def test_rejects_an_invoice_from_another_branch(self):
+        invoice = self._invoice()
+        with self.assertRaises(frappe.PermissionError):
+            self._run(invoice, 10, branch="Other Branch")
+        invoice.save.assert_not_called()

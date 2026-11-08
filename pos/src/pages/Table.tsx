@@ -9,13 +9,14 @@ import { Spinner } from '@ury/ui';
 import { Button } from '@ury/ui';
 import { Badge } from '@ury/ui';
 import { DINE_IN } from '../data/order-types';
-import { captainTransfer, getTableOrder, tableTransfer } from '../lib/order-api';
+import { captainTransfer, getTableOrder, tableTransfer, type POSInvoice } from '../lib/order-api';
 import { printOrder } from '../lib/print';
-import { resolvePrintFormat } from '../lib/invoice-api';
+import { applyBillDiscount, getCombinedOrderTotals, resolvePrintFormat } from '../lib/invoice-api';
 import { canCaptainTransfer, isUserRestrictedFromTableOrders } from '@ury/core';
 import { showToast } from '@ury/ui';
 import { t } from '../i18n';
 import LayoutView from '../components/LayoutView';
+import PaymentDialog from '../components/PaymentDialog';
 import TableMergeDialog from '../components/TableMergeDialog';
 import TableUnmergeDialog from '../components/TableUnmergeDialog';
 import TableTransferDialog from '../components/TableTransferDialog';
@@ -40,6 +41,7 @@ const TableView = () => {
 
   const [error, setError] = useState<string | null>(null);
   const [printingTable, setPrintingTable] = useState<string | null>(null);
+  const [printDialogContext, setPrintDialogContext] = useState<{ table: Table; order: POSInvoice } | null>(null);
   const [menuOpenForTable, setMenuOpenForTable] = useState<string | null>(null);
   const [mergeSourceTable, setMergeSourceTable] = useState<Table | null>(null);
   const [unmergeSourceTable, setUnmergeSourceTable] = useState<Table | null>(null);
@@ -193,23 +195,45 @@ const TableView = () => {
     setPrintingTable(table.name);
     try {
       const orderResponse = await getTableOrder(table.name);
-      const invoiceId = orderResponse.message?.name;
+      const order = orderResponse.message;
 
-      if (!invoiceId) {
+      if (!order?.name) {
         showToast.error('No active order found for this table');
         return;
       }
 
-      await printOrder({
-        orderId: invoiceId,
-        posProfile,
-        printFormat: resolvePrintFormat(
-          orderResponse.message ?? {},
-          posProfile.print_format
-        ),
-      });
-      showToast.success('Printed successfully');
-      await loadTables(table.restaurant_room, { useCache: false });
+      if (posProfile.enable_discount === 1) {
+        setPrintDialogContext({ table, order });
+        return;
+      }
+
+      await printTableOrder(table, order);
+    } catch (error) {
+      showToast.error(error instanceof Error ? error.message : 'Failed to print order');
+    } finally {
+      setPrintingTable(null);
+    }
+  };
+
+  const printTableOrder = async (table: Table, order: POSInvoice) => {
+    if (!posProfile) return;
+    await printOrder({
+      orderId: order.name,
+      posProfile,
+      printFormat: resolvePrintFormat(order, posProfile.print_format),
+    });
+    showToast.success('Printed successfully');
+    await loadTables(table.restaurant_room, { useCache: false });
+  };
+
+  const handlePrintWithDiscount = async (discount: number | null) => {
+    if (!printDialogContext) return;
+    const { table, order } = printDialogContext;
+    await applyBillDiscount(order.name, discount);
+    setPrintDialogContext(null);
+    setPrintingTable(table.name);
+    try {
+      await printTableOrder(table, order);
     } catch (error) {
       showToast.error(error instanceof Error ? error.message : 'Failed to print order');
     } finally {
@@ -571,6 +595,26 @@ const TableView = () => {
         currentCaptain={captainTransferContext?.currentCaptain ?? ''}
         onConfirm={handleCaptainTransferConfirm}
       />
+
+      {printDialogContext && (
+        <PaymentDialog
+          onClose={() => setPrintDialogContext(null)}
+          onPrint={handlePrintWithDiscount}
+          grandTotal={getCombinedOrderTotals(printDialogContext.order).grandTotal}
+          roundedTotal={getCombinedOrderTotals(printDialogContext.order).roundedTotal}
+          invoice={printDialogContext.order.name}
+          customer={printDialogContext.order.customer}
+          posProfile={posProfile?.name || ''}
+          table={printDialogContext.table.name}
+          tableLabel={printDialogContext.table.name}
+          cashier={posProfile?.cashier || ''}
+          owner={posProfile?.cashier || ''}
+          fetchOrders={async () => {}}
+          clearSelectedOrder={() => {}}
+          discountPercentage={printDialogContext.order.additional_discount_percentage}
+          discountAmount={printDialogContext.order.discount_amount}
+        />
+      )}
 
       {/* Status Legend */}
       <div className="fixed bottom-[4.5rem] w-full p-4 bg-white border-t border-border">

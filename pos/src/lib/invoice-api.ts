@@ -249,6 +249,21 @@ export async function selectNetworkPrinter(orderId: string, posProfile: string, 
 }
 
 
+export interface BillDiscountTotals {
+  additional_discount_percentage: number;
+  discount_amount: number;
+  grand_total: number;
+  rounded_total: number;
+}
+
+export async function applyBillDiscount(orderId: string, discount: number | null): Promise<BillDiscountTotals> {
+  const response = await call.post('ury.ury.doctype.ury_order.ury_order.apply_bill_discount', {
+    invoice: orderId,
+    additionalDiscount: discount,
+  });
+  return response.message;
+}
+
 export async function updatePrintStatus(orderId: string) {
   await call.post('ury.ury.api.ury_print.qz_print_update', { invoice: orderId });
 }

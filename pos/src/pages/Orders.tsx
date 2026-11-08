@@ -20,12 +20,14 @@ import { printOrder } from '../lib/print';
 import { call } from '@ury/core';
 import { splitBill, cancelOrder } from '../lib/order-api';
 import {
+  applyBillDiscount,
   getOrdersTabForInvoice,
   getSplitGroup,
   getCombinedOrderTotals,
   isMergedBill,
   resolvePrintFormat,
   mapSplitGroupInvoiceToPOSInvoice,
+  type BillDiscountTotals,
   type POSInvoice,
   type SplitGroupInvoice,
 } from '../lib/invoice-api';
@@ -93,6 +95,7 @@ export default function Orders() {
   const [cancelLoading, setCancelLoading] = React.useState(false);
   const [editLoading, setEditLoading] = React.useState(false);
   const [showPaymentDialog, setShowPaymentDialog] = React.useState(false);
+  const [showPrintDialog, setShowPrintDialog] = React.useState(false);
   const [showSplitDialog, setShowSplitDialog] = React.useState(false);
   const [showMergeDialog, setShowMergeDialog] = React.useState(false);
   const [orderActionsMenuOpen, setOrderActionsMenuOpen] = React.useState(false);
@@ -301,7 +304,24 @@ export default function Orders() {
     }
   }
 
-  async function handlePrintOrder() {
+  function handlePrintClick() {
+    if (!selectedOrder) return;
+    const isDraft = selectedOrder.status === 'Draft' || selectedOrder.status === 'Unbilled';
+    if (isDraft && posStore.posProfile?.enable_discount === 1) {
+      setShowPrintDialog(true);
+      return;
+    }
+    handlePrintOrder();
+  }
+
+  async function handlePrintWithDiscount(discount: number | null) {
+    if (!selectedOrder) return;
+    const totals = await applyBillDiscount(selectedOrder.name, discount);
+    setShowPrintDialog(false);
+    await handlePrintOrder(totals);
+  }
+
+  async function handlePrintOrder(discountTotals?: BillDiscountTotals) {
     if (!selectedOrder || !posStore.posProfile) return;
     setIsPrinting(true);
     try {
@@ -313,7 +333,7 @@ export default function Orders() {
       showToast.success(t('success.printed'));
       // Locally update selectedOrder.invoice_printed to 1
       if (selectedOrder && typeof selectedOrder === 'object') {
-        selectOrder({ ...selectedOrder, invoice_printed: 1 });
+        selectOrder({ ...selectedOrder, ...discountTotals, invoice_printed: 1 });
       }
       // If order was Unbilled, set to Draft and reload draft orders
       if (selectedStatus === 'Unbilled') {
@@ -792,7 +812,7 @@ export default function Orders() {
                   variant="outline"
                   size="icon"
                   className="flex-shrink-0"
-                  onClick={handlePrintOrder}
+                  onClick={handlePrintClick}
                   aria-label="Print"
                   disabled={isPrinting}
                 >
@@ -829,9 +849,13 @@ export default function Orders() {
           </>
         )}
       </div>
-      {showPaymentDialog && selectedOrder && (
+      {(showPaymentDialog || showPrintDialog) && selectedOrder && (
         <PaymentDialog
-          onClose={() => setShowPaymentDialog(false)}
+          onClose={() => {
+            setShowPaymentDialog(false);
+            setShowPrintDialog(false);
+          }}
+          onPrint={showPrintDialog ? handlePrintWithDiscount : undefined}
           grandTotal={selectedOrderTotals.grandTotal}
           roundedTotal={selectedOrderTotals.roundedTotal}
           invoice={selectedOrder.name}

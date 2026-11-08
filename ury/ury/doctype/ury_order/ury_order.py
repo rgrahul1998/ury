@@ -2605,6 +2605,37 @@ def _validate_additional_discount(additional_discount, pos_profile):
     return discount
 
 
+@frappe.whitelist(methods=["POST"])
+def apply_bill_discount(invoice, additionalDiscount=None):
+    """Save the discount on a draft invoice so the printed bill shows it."""
+    doc = frappe.get_doc("POS Invoice", invoice)
+    doc.check_permission("write")
+
+    user_branch = getBranch()
+    if doc.branch and user_branch and doc.branch != user_branch:
+        frappe.throw(_("Not permitted to update orders outside your active branch"), frappe.PermissionError)
+
+    if doc.docstatus != 0:
+        frappe.throw(_("A discount can only be applied to a draft order."))
+
+    discount = _validate_additional_discount(additionalDiscount, doc.pos_profile)
+
+    if flt(doc.additional_discount_percentage) != discount:
+        doc.additional_discount_percentage = discount
+        if not discount:
+            # ERPNext only recomputes discount_amount from a non-zero percentage.
+            doc.discount_amount = 0
+        doc.calculate_taxes_and_totals()
+        doc.save()
+
+    return {
+        "additional_discount_percentage": doc.additional_discount_percentage,
+        "discount_amount": doc.discount_amount,
+        "grand_total": doc.grand_total,
+        "rounded_total": doc.rounded_total,
+    }
+
+
 # Method for URY POS
 @frappe.whitelist()
 def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDiscount=None, table=None, invoice=None):

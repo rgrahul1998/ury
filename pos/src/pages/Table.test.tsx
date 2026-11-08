@@ -1,12 +1,15 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import Table from "./Table";
+import { getTableOrder } from "../lib/order-api";
+import { printOrder } from "../lib/print";
 
 // Mock the API calls
 const getRoomsMock = vi.fn();
 const getTablesMock = vi.fn();
 const getTableCountMock = vi.fn();
+const applyBillDiscountMock = vi.fn();
 vi.mock("../lib/table-api", () => ({
   getRooms: (...args: any[]) => getRoomsMock(...args),
   getTables: (...args: any[]) => getTablesMock(...args),
@@ -38,6 +41,8 @@ vi.mock("../lib/print", () => ({
 
 vi.mock("../lib/invoice-api", () => ({
   resolvePrintFormat: vi.fn(() => "Thermal"),
+  getCombinedOrderTotals: vi.fn(() => ({ grandTotal: 500, roundedTotal: 500 })),
+  applyBillDiscount: (...args: any[]) => applyBillDiscountMock(...args),
 }));
 
 // Mock stores
@@ -107,12 +112,19 @@ vi.mock("../components/CaptainTransferDialog", () => ({
 }));
 
 vi.mock("../components/TableCard", () => ({
-  default: ({ table, onNavigate }: any) => (
+  default: ({ table, onNavigate, onPrint }: any) => (
     <div data-testid={`table-${table.name}`} onClick={onNavigate}>
       {table.name}
+      <button onClick={onPrint}>print-{table.name}</button>
     </div>
   ),
   TABLE_STATE_STYLES: {},
+}));
+
+vi.mock("../components/PaymentDialog", () => ({
+  default: ({ onPrint }: any) => (
+    <button onClick={() => onPrint(10)}>confirm-print</button>
+  ),
 }));
 
 vi.mock("../components/LayoutView", () => ({
@@ -247,6 +259,45 @@ describe("Table View", () => {
 
     await waitFor(() => {
       expect(screen.getByText(/tables.no_tables_found/i)).toBeInTheDocument();
+    });
+  });
+
+  describe("print button", () => {
+    const order = { name: "INV-1", customer: "Walk In", grand_total: 500, rounded_total: 500 };
+
+    beforeEach(() => {
+      vi.mocked(getTableOrder).mockResolvedValue({ message: order } as any);
+      applyBillDiscountMock.mockResolvedValue({});
+    });
+
+    afterEach(() => {
+      delete (mockPosStore.posProfile as any).enable_discount;
+    });
+
+    it("asks for the discount, saves it, then prints", async () => {
+      (mockPosStore.posProfile as any).enable_discount = 1;
+      const user = userEvent.setup();
+      render(<Table />);
+
+      await user.click(await screen.findByText("print-T2"));
+      expect(printOrder).not.toHaveBeenCalled();
+
+      await user.click(await screen.findByText("confirm-print"));
+
+      await waitFor(() => expect(printOrder).toHaveBeenCalled());
+      expect(applyBillDiscountMock).toHaveBeenCalledWith("INV-1", 10);
+      expect(screen.queryByText("confirm-print")).not.toBeInTheDocument();
+    });
+
+    it("prints directly when discounts are disabled", async () => {
+      const user = userEvent.setup();
+      render(<Table />);
+
+      await user.click(await screen.findByText("print-T2"));
+
+      await waitFor(() => expect(printOrder).toHaveBeenCalled());
+      expect(screen.queryByText("confirm-print")).not.toBeInTheDocument();
+      expect(applyBillDiscountMock).not.toHaveBeenCalled();
     });
   });
 });
